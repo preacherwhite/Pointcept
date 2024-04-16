@@ -20,3 +20,6 @@ from .shapenet_part import ShapeNetPartDataset
 
 # dataloader
 from .dataloader import MultiDatasetDataloader
+
+# kitti dc
+from .kitti_dc import KITTIdcDataset
