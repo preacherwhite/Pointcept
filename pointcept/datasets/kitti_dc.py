@@ -30,6 +30,7 @@ class KITTIdcDataset(DefaultDataset):
         self.pc1_data = np.load(os.path.join(self.data_root, 'pc1_outputs.npy'))
         self.pc1_rgb_data = np.load(os.path.join(self.data_root, 'pc1_rgb_outputs.npy'))
         self.flow_3d_data = np.load(os.path.join(self.data_root, 'flow3d_outputs.npy'))
+        self.flow_3d_data = np.transpose(self.flow_3d_data, (0,2,1))
 
     def get_data_list(self):
         flow_files = sorted(glob.glob(os.path.join(self.data_root, 'flow', '*.png')))

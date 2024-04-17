@@ -9,6 +9,7 @@ import pointops
 from pointcept.models.builder import MODELS, build_model
 from pointcept.models.utils import offset2batch
 from pointcept.utils.comm import get_world_size
+import numpy as np
 
 def generate_positive_and_negative_masks(similarity_matrix, threshold):
     """Generates positive and negative masks used by contrastive loss."""
@@ -16,41 +17,36 @@ def generate_positive_and_negative_masks(similarity_matrix, threshold):
     negative_mask = 1 - positive_mask
     return positive_mask, negative_mask
 
-def generate_ignore_mask(labels, ignore_labels):
-    """Generates ignore mask used by contrastive loss."""
-    ignore_mask = torch.any(torch.eq(labels.unsqueeze(-1), torch.tensor(ignore_labels).view(-1, 1, 1)), dim=0)
-    ignore_mask = torch.logical_or(ignore_mask, ignore_mask.permute(0, 2, 1)).float()
-    return ignore_mask
 
-def compute_contrastive_loss(logits, positive_mask, negative_mask, ignore_mask):
-    """Contrastive loss function."""
-    validity_mask = 1 - ignore_mask
-    positive_mask *= validity_mask
-    negative_mask *= validity_mask
+def compute_contrastive_loss_without_ignore(logits, positive_mask, negative_mask):
+    """Contrastive loss function without an ignore mask."""
+    exp_logits = torch.exp(logits)
+    exp_sum = torch.sum(exp_logits * negative_mask, dim=2, keepdim=True)
 
-    exp_logits = torch.exp(logits) * validity_mask
-    normalized_exp_logits = exp_logits / (exp_logits + torch.sum(exp_logits * negative_mask, dim=2, keepdim=True))
-    neg_log_likelihood = -torch.log(normalized_exp_logits * validity_mask + ignore_mask)
+    # Avoid division by zero
+    exp_sum = torch.clamp(exp_sum, min=1e-6)
 
-    normalized_weight = positive_mask / torch.clamp(torch.sum(positive_mask, dim=2, keepdim=True), min=1e-6)
-    neg_log_likelihood = torch.sum(neg_log_likelihood * normalized_weight, dim=2)
+    # Compute normalized exponential logits
+    normalized_exp_logits = exp_logits / (exp_logits + exp_sum)
 
-    positive_mask_sum = torch.sum(positive_mask, dim=2)
-    valid_index = 1 - (positive_mask_sum == 0).float()
-    normalized_weight = valid_index / torch.clamp(torch.sum(valid_index, dim=1, keepdim=True), min=1e-6)
-    neg_log_likelihood = torch.sum(neg_log_likelihood * normalized_weight, dim=1)
-    loss = torch.mean(neg_log_likelihood)
+    # Compute negative log likelihood
+    neg_log_likelihood = -torch.log(normalized_exp_logits + 1e-6)  # Adding epsilon for numerical stability
+
+    # Weighting negative log likelihood by the positive mask
+    print(neg_log_likelihood.shape)
+    weighted_neg_log_likelihood = neg_log_likelihood * positive_mask
+    loss = torch.sum(weighted_neg_log_likelihood) / torch.sum(positive_mask)  # Normalizing by the number of positives
 
     if get_world_size() > 1:
         dist.all_reduce(loss)
     return loss / get_world_size()
-
-def within_sample_contrastive_loss(features, similarity_matrix, threshold, ignore_labels, temperature=0.07):
+    
+def within_sample_contrastive_loss(features, similarity_matrix, threshold, temperature=0.07):
     """Computes within-sample contrastive loss."""
-    logits = torch.matmul(features, features.transpose(1, 2)) / temperature
+    logits = torch.matmul(features, features.transpose(1, 2)) 
+    logits = logits / torch.Tensor(temperature).to(features.device)
     positive_mask, negative_mask = generate_positive_and_negative_masks(similarity_matrix, threshold)
-    ignore_mask = generate_ignore_mask(similarity_matrix, ignore_labels)
-    return compute_contrastive_loss(logits, positive_mask, negative_mask, ignore_mask)
+    return compute_contrastive_loss_without_ignore(logits, positive_mask, negative_mask)
 
 @MODELS.register_module("FPC-v1")
 class FlowPointContrast(nn.Module):
@@ -73,6 +69,16 @@ class FlowPointContrast(nn.Module):
         self.color_weight = color_weight
         self.proximity_weight = proximity_weight
 
+    # def calculate_similarity(self, vectors, similarity_func):
+    #     batch_size = len(vectors)
+    #     similarity_matrices = []
+
+    #     for i in range(batch_size):
+    #         similarity_matrix = similarity_func(vectors[i])
+    #         similarity_matrices.append(similarity_matrix)
+
+    #     return torch.stack(similarity_matrices)
+    
     def calculate_flow_similarity(self, flow):
         flow_norm = torch.norm(flow, dim=-1)
         flow_similarity = torch.matmul(flow, flow.transpose(1, 2)) / (
@@ -81,6 +87,7 @@ class FlowPointContrast(nn.Module):
         return flow_similarity
 
     def calculate_color_similarity(self, colors):
+        colors = colors.to(torch.float32)
         color_similarity = 1 - torch.cdist(colors, colors) / torch.sqrt(torch.tensor(colors.shape[-1]))
         return color_similarity
 
@@ -90,10 +97,16 @@ class FlowPointContrast(nn.Module):
         return proximity_similarity
 
     def forward(self, data_dict):
-        features = self.backbone(data_dict)
-        flow = data_dict["flow"]
-        colors = data_dict["color"]
-        points = data_dict["coord"]
+        batch_num = len(data_dict['offset'])
+        flow = data_dict["flow"].view(batch_num, -1, data_dict["flow"].shape[1])
+        colors = data_dict["color"].view(batch_num, -1, data_dict["color"].shape[1])
+        points = data_dict["coord"].view(batch_num, -1, data_dict["coord"].shape[1])
+
+        subset_keys = ['coord', 'grid_coord', 'offset', 'feat']
+        data_dict = {key: data_dict[key] for key in subset_keys if key in data_dict}
+        features = self.backbone(data_dict).feat
+
+        features = features.view(batch_num, -1, features.shape[1])
 
         flow_similarity = self.calculate_flow_similarity(flow)
         color_similarity = self.calculate_color_similarity(colors)

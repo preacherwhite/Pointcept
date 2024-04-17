@@ -1,7 +1,7 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 32  # bs: total bs in all gpus
+batch_size = 4 # bs: total bs in all gpus
 num_worker = 32
 mix_prob = 0
 empty_cache = False
@@ -14,7 +14,7 @@ model = dict(
     type="FPC-v1",
     backbone=dict(
         type="PT-v3m1",
-        in_channels=4,
+        in_channels=6,
         order=["z", "z-trans", "hilbert", "hilbert-trans"],
         stride=(2, 2, 2, 2),
         enc_depths=(2, 2, 2, 6, 2),
@@ -48,9 +48,9 @@ model = dict(
     flow_similarity_threshold=0.8,
     color_similarity_threshold=0.7,
     proximity_threshold=0.5,
-    flow_weight=1.0,
-    color_weight=1.0,
-    proximity_weight=1.0,
+    flow_weight=0,
+    color_weight=0.25,
+    proximity_weight=0.25,
 )
 
 # scheduler settings
@@ -83,8 +83,8 @@ data = dict(
             dict(type="RandomFlip", p=0.5),
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
             dict(
-                type="GridSample",
-                grid_size=0.05,
+                type="GridVoxelize",
+                grid_size= 0.025,
                 hash_type="fnv",
                 mode="train",
                 keys=("coord", "color", "flow"),
@@ -93,7 +93,7 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "flow"),
+                keys=("coord", "grid_coord", "color","flow"),
                 feat_keys=("coord", "color"),
             ),
         ],

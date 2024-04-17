@@ -918,6 +918,94 @@ class GridSample(object):
             hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
         return hashed_arr
 
+@TRANSFORMS.register_module()
+class GridVoxelize(object):
+    def __init__(
+        self,
+        grid_size=0.05,
+        hash_type="fnv",
+        mode="train",
+        keys=("coord", "color", "normal", "segment"),
+        return_inverse=False,
+        return_grid_coord=False,
+        return_min_coord=False,
+        return_displacement=False,
+        project_displacement=False,
+    ):
+        self.grid_size = grid_size
+        self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
+        assert mode in ["train", "test"]
+        self.mode = mode
+        self.keys = keys
+        self.return_inverse = return_inverse
+        self.return_grid_coord = return_grid_coord
+        self.return_min_coord = return_min_coord
+        self.return_displacement = return_displacement
+        self.project_displacement = project_displacement
+
+    def __call__(self, data_dict):
+        assert "coord" in data_dict.keys()
+        scaled_coord = data_dict["coord"] / np.array(self.grid_size)
+        grid_coord = np.floor(scaled_coord).astype(int)
+        min_coord = grid_coord.min(0)
+        grid_coord -= min_coord
+        scaled_coord -= min_coord
+        min_coord = min_coord * np.array(self.grid_size)
+        key = self.hash(grid_coord)
+        idx_sort = np.argsort(key)
+        key_sort = key[idx_sort]
+        _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
+        
+        if self.return_inverse:
+            data_dict["inverse"] = inverse
+        if self.return_grid_coord:
+            data_dict["grid_coord"] = grid_coord
+        if self.return_min_coord:
+            data_dict["min_coord"] = min_coord.reshape([1, 3])
+        if self.return_displacement:
+            displacement = scaled_coord - grid_coord - 0.5
+            if self.project_displacement:
+                displacement = np.sum(displacement * data_dict["normal"], axis=-1, keepdims=True)
+            data_dict["displacement"] = displacement
+        
+        return data_dict
+
+    @staticmethod
+    def ravel_hash_vec(arr):
+        """
+        Ravel the coordinates after subtracting the min coordinates.
+        """
+        assert arr.ndim == 2
+        arr = arr.copy()
+        arr -= arr.min(0)
+        arr = arr.astype(np.uint64, copy=False)
+        arr_max = arr.max(0).astype(np.uint64) + 1
+
+        keys = np.zeros(arr.shape[0], dtype=np.uint64)
+        # Fortran style indexing
+        for j in range(arr.shape[1] - 1):
+            keys += arr[:, j]
+            keys *= arr_max[j + 1]
+        keys += arr[:, -1]
+        return keys
+
+    @staticmethod
+    def fnv_hash_vec(arr):
+        """
+        FNV64-1A
+        """
+        assert arr.ndim == 2
+        # Floor first for negative coordinates
+        arr = arr.copy()
+        arr = arr.astype(np.uint64, copy=False)
+        hashed_arr = np.uint64(14695981039346656037) * np.ones(
+            arr.shape[0], dtype=np.uint64
+        )
+        for j in range(arr.shape[1]):
+            hashed_arr *= np.uint64(1099511628211)
+            hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
+        return hashed_arr
+
 
 @TRANSFORMS.register_module()
 class SphereCrop(object):
