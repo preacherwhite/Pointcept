@@ -18,24 +18,20 @@ def generate_positive_and_negative_masks(similarity_matrix, threshold):
     return positive_mask, negative_mask
 
 
-def compute_contrastive_loss_without_ignore(logits, positive_mask, negative_mask):
-    """Contrastive loss function without an ignore mask."""
-    exp_logits = torch.exp(logits)
-    exp_sum = torch.sum(exp_logits * negative_mask, dim=2, keepdim=True)
+def compute_contrastive_loss(logits, positive_mask, negative_mask):
+    """Contrastive loss function."""
+    exp_logits = torch.exp(logits) 
+    normalized_exp_logits = exp_logits / torch.clamp((exp_logits + torch.sum(exp_logits * negative_mask, dim=2, keepdim=True)),min =1e-6)
+    neg_log_likelihood = -torch.log(normalized_exp_logits)
 
-    # Avoid division by zero
-    exp_sum = torch.clamp(exp_sum, min=1e-6)
+    normalized_weight = positive_mask / torch.clamp(torch.sum(positive_mask, dim=2, keepdim=True), min=1e-6)
+    neg_log_likelihood = torch.sum(neg_log_likelihood * normalized_weight, dim=2)
 
-    # Compute normalized exponential logits
-    normalized_exp_logits = exp_logits / (exp_logits + exp_sum)
-
-    # Compute negative log likelihood
-    neg_log_likelihood = -torch.log(normalized_exp_logits + 1e-6)  # Adding epsilon for numerical stability
-
-    # Weighting negative log likelihood by the positive mask
-    print(neg_log_likelihood.shape)
-    weighted_neg_log_likelihood = neg_log_likelihood * positive_mask
-    loss = torch.sum(weighted_neg_log_likelihood) / torch.sum(positive_mask)  # Normalizing by the number of positives
+    positive_mask_sum = torch.sum(positive_mask, dim=2)
+    valid_index = 1 - (positive_mask_sum == 0).float()
+    normalized_weight = valid_index / torch.clamp(torch.sum(valid_index, dim=1, keepdim=True), min=1e-6)
+    neg_log_likelihood = torch.sum(neg_log_likelihood * normalized_weight, dim=1)
+    loss = torch.mean(neg_log_likelihood)
 
     if get_world_size() > 1:
         dist.all_reduce(loss)
@@ -46,7 +42,7 @@ def within_sample_contrastive_loss(features, similarity_matrix, threshold, tempe
     logits = torch.matmul(features, features.transpose(1, 2)) 
     logits = logits / torch.Tensor(temperature).to(features.device)
     positive_mask, negative_mask = generate_positive_and_negative_masks(similarity_matrix, threshold)
-    return compute_contrastive_loss_without_ignore(logits, positive_mask, negative_mask)
+    return compute_contrastive_loss(logits, positive_mask, negative_mask)
 
 @MODELS.register_module("FPC-v1")
 class FlowPointContrast(nn.Module):

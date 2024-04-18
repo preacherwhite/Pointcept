@@ -48,13 +48,14 @@ model = dict(
     flow_similarity_threshold=0.8,
     color_similarity_threshold=0.7,
     proximity_threshold=0.5,
-    flow_weight=0,
-    color_weight=0.25,
-    proximity_weight=0.25,
+    flow_weight=1,
+    color_weight=0,
+    proximity_weight=0,
 )
 
 # scheduler settings
-epoch = 100
+epoch = 50
+eval_epoch = 50
 optimizer = dict(type="AdamW", lr=0.002, weight_decay=0.005)
 scheduler = dict(
     type="OneCycleLR",
@@ -84,7 +85,7 @@ data = dict(
             dict(type="RandomJitter", sigma=0.005, clip=0.02),
             dict(
                 type="GridVoxelize",
-                grid_size= 0.025,
+                grid_size= 0.05,
                 hash_type="fnv",
                 mode="train",
                 keys=("coord", "color", "flow"),
