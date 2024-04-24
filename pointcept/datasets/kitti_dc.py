@@ -2,7 +2,6 @@ import os
 import glob
 import numpy as np
 import cv2
-
 from .builder import DATASETS
 from .defaults import DefaultDataset
 
@@ -25,12 +24,6 @@ class KITTIdcDataset(DefaultDataset):
             test_cfg=test_cfg,
             loop=loop,
         )
-        
-        # Load large numpy files during initialization
-        self.pc1_data = np.load(os.path.join(self.data_root, 'pc1_outputs.npy'))
-        self.pc1_rgb_data = np.load(os.path.join(self.data_root, 'pc1_rgb_outputs.npy'))
-        self.flow_3d_data = np.load(os.path.join(self.data_root, 'flow3d_outputs.npy'))
-        self.flow_3d_data = np.transpose(self.flow_3d_data, (0,2,1))
 
     def get_data_list(self):
         flow_files = sorted(glob.glob(os.path.join(self.data_root, 'flow', '*.png')))
@@ -42,22 +35,26 @@ class KITTIdcDataset(DefaultDataset):
 
     def get_data(self, idx):
         file_id = self.data_list[idx % len(self.data_list)]
-        
-        # Get point cloud coordinates and RGB values from loaded data
-        coord = self.pc1_data[idx]
-        color = self.pc1_rgb_data[idx]
-        
-        # Get 3D flow from loaded data
-        flow = self.flow_3d_data[idx]
-        
+
+        # Load point cloud coordinates and RGB values from individual .npy files
+        coord_file = os.path.join(self.data_root, 'pc1', f'{file_id}.npy')
+        coord = np.load(coord_file)
+
+        color_file = os.path.join(self.data_root, 'pc1_rgb', f'{file_id}.npy')
+        color = np.load(color_file)
+
+        # Load 3D flow from individual .npy file
+        flow_file = os.path.join(self.data_root, 'flow3d', f'{file_id}.npy')
+        flow = np.load(flow_file)
+
         # Load image
         image_file = os.path.join(self.data_root, 'image', f'{file_id}.png')
         image = cv2.imread(image_file)
-        
+
         # Load intrinsics
         intrinsics_file = os.path.join(self.data_root, 'intrinsics', f'{file_id}.npy')
         intrinsics = np.load(intrinsics_file)
-        
+
         data_dict = dict(coord=coord, color=color, flow=flow, image=image, intrinsics=intrinsics)
         return data_dict
 
