@@ -1,1 +1,2 @@
 from .flow_point_contrast_v1 import FlowPointContrast
+from .flow_point_contrast_v1_pad import FlowPointContrastPad

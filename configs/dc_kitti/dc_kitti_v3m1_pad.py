@@ -1,7 +1,7 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 1 # bs: total bs in all gpus
+batch_size = 16 # bs: total bs in all gpus
 num_worker = 4
 mix_prob = 0
 empty_cache = False
@@ -11,7 +11,7 @@ find_unused_parameters = False
 
 # model settings
 model = dict(
-    type="FPC-v1",
+    type="FPC-v1p",
     backbone=dict(
         type="PT-v3m1",
         in_channels=6,
@@ -107,24 +107,33 @@ data = dict(
         type=dataset_type,
         split="test",
         data_root=data_root,
-        transform=[
-            dict(
-                type="GridSample",
-                grid_size= 0.05,
-                hash_type="fnv",
-                mode="train",
-                keys=("coord", "color", "flow","sam"),
-                return_grid_coord=True,
-            ),
-            dict(type="ToTensor"),
-            dict(
-                type="Collect",
-                keys=("coord", "grid_coord", "color","flow","sam",'image','intrinsics'),
-                feat_keys=("coord", "color"),
-            ),
-        ],
+        transform=[],
         test_mode=True,
-        
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=0.05,
+                hash_type="fnv",
+                mode="test",
+                return_grid_coord=True,
+                keys=("coord", "color"),
+            ),
+            crop=None,
+            post_transform=[
+                dict(
+                    type="PointClip",
+                    point_cloud_range=(-35.2, -35.2, -4, 35.2, 35.2, 2),
+                ),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord"),
+                    feat_keys=("coord", "color"),
+                ),
+            ],
+            
+        ),
+        ignore_index=ignore_index,
     ),
 )
 
@@ -134,6 +143,4 @@ hooks = [
     dict(type="InformationWriter"),
     dict(type="CheckpointSaver", save_freq=None),
 ]
-
-# Tester
 test = dict(type="ClusterSegTester", verbose=True)

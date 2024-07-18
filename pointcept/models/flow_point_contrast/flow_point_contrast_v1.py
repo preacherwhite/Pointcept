@@ -16,69 +16,27 @@ import numpy as np
 from pointcept.utils.comm import get_world_size
 import torch.distributed as dist
 
-# def get_sam(image, mask_generator):
-#     masks = mask_generator.generate(image)
-#     group_ids = np.full((image.shape[0], image.shape[1]), -1, dtype=int)
-#     num_masks = len(masks)
-#     group_counter = 0
-#     for i in reversed(range(num_masks)):
-#         group_ids[masks[i]["segmentation"]] = group_counter
-#         group_counter += 1
-#     return group_ids
 
-# def get_pcd(color_image, intrinsics, mask_generator):
-
-#     group_ids = get_sam(color_image, mask_generator)
-#     colors = np.zeros_like(color_image)
-#     colors[:,0] = color_image[:,2]
-#     colors[:,1] = color_image[:,1]
-#     colors[:,2] = color_image[:,0]
-
-    
-#     depth_shift = 1000.0
-#     x,y = np.meshgrid(np.linspace(0,depth_img.shape[1]-1,depth_img.shape[1]), np.linspace(0,depth_img.shape[0]-1,depth_img.shape[0]))
-#     uv_depth = np.zeros((depth_img.shape[0], depth_img.shape[1], 3))
-#     uv_depth[:,:,0] = x
-#     uv_depth[:,:,1] = y
-#     uv_depth[:,:,2] = depth_img/depth_shift
-#     uv_depth = np.reshape(uv_depth, [-1,3])
-#     uv_depth = uv_depth[np.where(uv_depth[:,2]!=0),:].squeeze()
-    
-#     intrinsic_inv = np.linalg.inv(depth_intrinsic)
-#     fx = depth_intrinsic[0,0]
-#     fy = depth_intrinsic[1,1]
-#     cx = depth_intrinsic[0,2]
-#     cy = depth_intrinsic[1,2]
-#     bx = depth_intrinsic[0,3]
-#     by = depth_intrinsic[1,3]
-#     n = uv_depth.shape[0]
-#     points = np.ones((n,4))
-#     X = (uv_depth[:,0]-cx)*uv_depth[:,2]/fx + bx
-#     Y = (uv_depth[:,1]-cy)*uv_depth[:,2]/fy + by
-#     points[:,0] = X
-#     points[:,1] = Y
-#     points[:,2] = uv_depth[:,2]
-#     points_world = np.dot(points, np.transpose(pose))
-#     group_ids = num_to_natural(group_ids)
-#     save_dict = dict(coord=points_world[:,:3], color=colors, group=group_ids)
-#     return save_dict
-
-def generate_positive_and_negative_masks(similarity_matrix, threshold, file=sys.stdout):
+def generate_positive_and_negative_masks(labels):
     """Generates positive and negative masks used by contrastive loss."""
-    positive_mask = (similarity_matrix >= threshold).float()
-    negative_mask = 1 - positive_mask
+    # Reshape to column vector and row vector
+    tensor_col = labels.view(-1, 1)  # shape (7457, 1)
+    tensor_row = labels.view(1, -1)  # shape (1, 7457)
 
+    # Compare using torch.eq
+    positive_mask = torch.eq(tensor_col, tensor_row).float()
+    negative_mask = 1 - positive_mask
     return positive_mask, negative_mask
 
-def hard_compute_contrastive_loss(logits_list, positive_mask_list, negative_mask_list, file=sys.stdout):
+def hard_compute_contrastive_loss(logits_list, mask):
     """Contrastive loss function."""
     batch_size = len(logits_list)
     losses = []
 
     for i in range(batch_size):
         logits = logits_list[i]
-        positive_mask = positive_mask_list[i]
-        negative_mask = negative_mask_list[i]
+
+        positive_mask, negative_mask = generate_positive_and_negative_masks(mask[i])
 
         exp_logits = torch.exp(logits)
 
@@ -107,29 +65,25 @@ def hard_compute_contrastive_loss(logits_list, positive_mask_list, negative_mask
 
     return loss / get_world_size()
 
-def hard_within_sample_contrastive_loss(features_list, similarity_matrix_list, threshold, temperature=0.07, file=sys.stdout):
+def masked_contrastive_loss(features_list, mask, temperature=0.07):
     """Computes within-sample contrastive loss."""
     batch_size = len(features_list)
     logits_list = []
-    positive_mask_list = []
-    negative_mask_list = []
 
     for i in range(batch_size):
         features = features_list[i]
-        similarity_matrix = similarity_matrix_list[i]
 
         normalized_features = features / (
             torch.norm(features, p=2, dim=1, keepdim=True) + 1e-7
         )
         logits = torch.matmul(normalized_features, normalized_features.transpose(0, 1)) / temperature
 
-        positive_mask, negative_mask = generate_positive_and_negative_masks(similarity_matrix, threshold, file)
 
         logits_list.append(logits)
-        positive_mask_list.append(positive_mask)
-        negative_mask_list.append(negative_mask)
 
-    return hard_compute_contrastive_loss(logits_list, positive_mask_list, negative_mask_list, file)
+    return hard_compute_contrastive_loss(logits_list, mask)
+
+
 
 
 def within_sample_contrastive_loss(features_list, sim_scores_list, tau, gamma, eta, nu):
@@ -197,6 +151,7 @@ class FlowPointContrast(nn.Module):
         flow_weight=1.0,
         color_weight=1.0,
         proximity_weight=1.0,
+        sam_weight = 1.0,
     ):
         super().__init__()
         self.backbone = build_model(backbone)
@@ -206,6 +161,7 @@ class FlowPointContrast(nn.Module):
         self.flow_weight = flow_weight
         self.color_weight = color_weight
         self.proximity_weight = proximity_weight
+        self.sam_weight = sam_weight
 
     def calculate_flow_similarity(self, flow):
         flow_norm = torch.norm(flow, dim=-1)
@@ -238,16 +194,25 @@ class FlowPointContrast(nn.Module):
         return proximity_similarity
 
     def forward(self, data_dict):
+        
+
+        if not self.training:
+            features = self.backbone(data_dict).feat
+            if isinstance(features, dict):
+                features = features.dict
+            return features
+
+
+        sam_label = data_dict["sam"]
         flow = data_dict["flow"]
         colors = data_dict["color"]
         points = data_dict["coord"]
-
+        
         # subset_keys = ['coord', 'grid_coord', 'offset', 'feat']
         # data_dict = {key: data_dict[key] for key in subset_keys if key in data_dict}
         features = self.backbone(data_dict).feat
         if isinstance(features, dict):
             features = features.dict
-
         offset = data_dict['offset']
         batch_size = len(offset)
 
@@ -258,6 +223,7 @@ class FlowPointContrast(nn.Module):
         colors_split = torch.split(colors, sizes)
         points_split = torch.split(points, sizes)
         features_split = torch.split(features, sizes)
+        sam_split = torch.split(sam_label, sizes)
 
         flow_similarity_list = []
         color_similarity_list = []
@@ -283,11 +249,14 @@ class FlowPointContrast(nn.Module):
         proximity_loss = within_sample_contrastive_loss(
             features_split, proximity_similarity_list, self.proximity_threshold, gamma = 5.0, eta =1, nu = 1
         )
-
+        #print(len(sam_split),sam_split[0].shape)
+        sam_loss = masked_contrastive_loss(features_split, sam_split, self.sam_weight)
+        
         loss = (
             self.flow_weight * flow_loss
             + self.color_weight * color_loss
             + self.proximity_weight * proximity_loss
+            + self.sam_weight * sam_loss
         )
         result_dict = {"loss": loss}
         return result_dict

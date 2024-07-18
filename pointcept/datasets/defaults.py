@@ -27,6 +27,7 @@ class DefaultDataset(Dataset):
         transform=None,
         test_mode=False,
         test_cfg=None,
+        special_test=True,
         loop=1,
     ):
         super(DefaultDataset, self).__init__()
@@ -39,7 +40,7 @@ class DefaultDataset(Dataset):
         self.test_mode = test_mode
         self.test_cfg = test_cfg if test_mode else None
 
-        if test_mode:
+        if test_mode and special_test:
             self.test_voxelize = (
                 TRANSFORMS.build(self.test_cfg.voxelize)
                 if self.test_cfg.voxelize is not None

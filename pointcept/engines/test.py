@@ -13,10 +13,13 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torch.utils.data
+from kmeans_pytorch import kmeans
+from scipy.spatial.transform import Rotation as R
+import cv2
 
 from .defaults import create_ddp_model
 import pointcept.utils.comm as comm
-from pointcept.datasets import build_dataset, collate_fn
+from pointcept.datasets import build_dataset, collate_fn, point_collate_fn
 from pointcept.models import build_model
 from pointcept.utils.logger import get_root_logger
 from pointcept.utils.registry import Registry
@@ -499,6 +502,121 @@ class PartSegTester(TesterBase):
                     name=self.test_loader.dataset.categories[i],
                     iou_cat=iou_category[i] / (iou_count[i] + 1e-10),
                     iou_count=int(iou_count[i]),
+                )
+            )
+        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    @staticmethod
+    def collate_fn(batch):
+        return collate_fn(batch)
+
+
+@TESTERS.register_module()
+class ClusterSegTester(TesterBase):
+    def test(self):
+        test_dataset = self.test_loader.dataset
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+
+        batch_time = AverageMeter()
+
+        self.model.eval()
+
+        save_path = os.path.join(
+            self.cfg.save_path, "result",
+        )
+        make_dirs(save_path)
+
+        # Define cluster colors (adjust as needed)
+        cluster_colors = np.array([
+            [255, 0, 0],    # Red
+            [0, 255, 0],    # Green
+            [0, 0, 255],    # Blue
+            [255, 255, 0],  # Yellow
+            [255, 0, 255],  # Magenta
+        ])
+
+        for idx in range(len(test_dataset)):
+            end = time.time()
+            data_name = test_dataset.get_data_name(idx)
+
+            data_dict = test_dataset[idx]
+            input_dict = point_collate_fn([data_dict])
+            for key in input_dict.keys():
+                if isinstance(input_dict[key], torch.Tensor):
+                    input_dict[key] = input_dict[key].cuda(non_blocking=True)
+            
+            with torch.no_grad():
+                out_feat = self.model(input_dict)
+
+            if self.cfg.empty_cache:
+                torch.cuda.empty_cache()
+            
+            # cluster via k-means
+            cluster_ids_x, cluster_centers = kmeans(
+                X=out_feat, num_clusters=5, distance='cosine', device=out_feat.device
+            )
+            
+            # Move data to CPU and convert to numpy
+            cluster_ids = cluster_ids_x.cpu().numpy()
+            coords = input_dict['coord'].cpu().numpy() 
+            
+            # Assign colors based on cluster IDs
+            point_colors = cluster_colors[cluster_ids]
+
+            # Save point cloud with cluster colors
+            pc_save_path = os.path.join(save_path, f'{data_name}_clustered_pc.txt')
+            #np.savetxt(pc_save_path, np.hstack((coords, point_colors)), fmt='%.6f')
+
+            # Project points to image
+            original_image = input_dict['image'].cpu().numpy()
+            intrinsics = input_dict['intrinsics'].cpu().numpy()
+            
+            # Construct intrinsics matrix
+            f, cx, cy = intrinsics
+            intrinsics_matrix = np.array([
+                [f, 0, cx, 0],
+                [0, f, cy ,0],
+                [0, 0, 1 , 0],
+            ])
+            
+            # Project 3D points to 2D image plane
+            points_homogeneous = np.hstack((coords, np.ones((coords.shape[0], 1))))
+            points_2d = np.dot(intrinsics_matrix, points_homogeneous.T).T
+            points_2d = points_2d[:, :2] / points_2d[:, 2:]
+
+            # Create a blank image for projection
+            proj_image = np.zeros((original_image.shape[0], original_image.shape[1], 3), dtype=np.uint8)
+
+            # Draw colored points on the image
+            for pt, color in zip(points_2d, point_colors):
+                x, y = int(pt[0]), int(pt[1])
+                if 0 <= x < proj_image.shape[1] and 0 <= y < proj_image.shape[0]:
+                    cv2.circle(proj_image, (x, y), 1, color.tolist(), -1)
+
+            # # Ensure original_image is in BGR format for cv2
+            # if original_image.shape[-1] == 3:
+            #     original_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR)
+            # elif len(original_image.shape) == 2:
+            #     original_image = cv2.cvtColor(original_image, cv2.COLOR_GRAY2BGR)
+
+            # Resize original_image to match proj_image if necessary
+            if original_image.shape[:2] != proj_image.shape[:2]:
+                original_image = cv2.resize(original_image, (proj_image.shape[1], proj_image.shape[0]))
+
+            # Concatenate original image and projected point cloud image
+            combined_image = np.hstack((original_image, proj_image))
+
+            # Save combined image
+            img_save_path = os.path.join(save_path, f'{data_name}_comparison.png')
+            cv2.imwrite(img_save_path, combined_image)
+
+            batch_time.update(time.time() - end)
+            logger.info(
+                "Test: {} [{}/{}] "
+                "Batch {batch_time.val:.3f} "
+                "({batch_time.avg:.3f}) ".format(
+                    data_name, idx + 1, len(test_dataset), batch_time=batch_time
                 )
             )
         logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
