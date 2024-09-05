@@ -554,7 +554,7 @@ class ClusterSegTester(TesterBase):
             
             # cluster via k-means
             cluster_ids_x, cluster_centers = kmeans(
-                X=out_feat, num_clusters=5, distance='cosine', device=out_feat.device
+                X=out_feat, num_clusters=5, distance='cosine', iter_limit = 100, device=out_feat.device,
             )
             
             # Move data to CPU and convert to numpy
@@ -593,12 +593,6 @@ class ClusterSegTester(TesterBase):
                 x, y = int(pt[0]), int(pt[1])
                 if 0 <= x < proj_image.shape[1] and 0 <= y < proj_image.shape[0]:
                     cv2.circle(proj_image, (x, y), 1, color.tolist(), -1)
-
-            # # Ensure original_image is in BGR format for cv2
-            # if original_image.shape[-1] == 3:
-            #     original_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR)
-            # elif len(original_image.shape) == 2:
-            #     original_image = cv2.cvtColor(original_image, cv2.COLOR_GRAY2BGR)
 
             # Resize original_image to match proj_image if necessary
             if original_image.shape[:2] != proj_image.shape[:2]:

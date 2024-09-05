@@ -110,10 +110,10 @@ def compute_contrastive_loss(features_list, sim_scores_list, tau, gamma, eta, nu
         # Calculate g_plus and g_minus
         g_plus = 1 / (1 + torch.exp(gamma * (tau - sim_scores)))
         g_minus = 1 / (1 + torch.exp(gamma * (sim_scores - tau)))
-
+        
         # Calculate all-pairs similarity of features
         feature_similarity = torch.matmul(features, features.transpose(0, 1))
-
+        
         # Calculate s_a_plus and s_a_minus using weighted sum
         if score_higher_positive:
             s_a_plus = feature_similarity * g_plus
@@ -124,17 +124,17 @@ def compute_contrastive_loss(features_list, sim_scores_list, tau, gamma, eta, nu
         s_a_plus_exp = torch.sum(torch.exp(eta * s_a_plus), dim=1)
         s_a_minus_exp = torch.sum(torch.exp(-nu * s_a_minus), dim=1)
 
+
         # Calculate the loss for each point
         loss_per_point = (torch.log(1 + s_a_plus_exp) / eta) + \
                          (torch.log(1 + s_a_minus_exp) / nu)
-
         # Sum the loss over all points
         loss = torch.mean(loss_per_point)
         losses.append(loss)
 
     # Because the features similarity is being weighted, this needs to be negated
     loss = -torch.mean(torch.stack(losses))
-
+    #print(loss)
     if get_world_size() > 1:
         dist.all_reduce(loss)
     return loss / get_world_size()
@@ -250,13 +250,13 @@ class FlowPointContrast(nn.Module):
             features_split, proximity_similarity_list, self.proximity_threshold, gamma = 5.0, eta =1, nu = 1
         )
         #print(len(sam_split),sam_split[0].shape)
-        sam_loss = masked_contrastive_loss(features_split, sam_split, self.sam_weight)
-        
-        loss = (
-            self.flow_weight * flow_loss
-            + self.color_weight * color_loss
-            + self.proximity_weight * proximity_loss
-            + self.sam_weight * sam_loss
-        )
+        #sam_loss = masked_contrastive_loss(features_split, sam_split, self.sam_weight)
+        loss =  self.color_weight * color_loss + \
+                self.flow_weight * flow_loss + \
+                self.proximity_weight * proximity_loss #+ \
+                #1 * sam_loss
+    
+        # print(flow_loss.item(), self.flow_weight, color_loss.item(), self.color_weight,proximity_loss.item(),self.proximity_weight,sam_loss.item(),self.sam_weight)
+        # print(loss)
         result_dict = {"loss": loss}
         return result_dict

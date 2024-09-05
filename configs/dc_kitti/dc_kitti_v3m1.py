@@ -2,7 +2,7 @@ _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
 batch_size = 1 # bs: total bs in all gpus
-num_worker = 4
+num_worker = 1
 mix_prob = 0
 empty_cache = False
 enable_amp = False
@@ -48,10 +48,10 @@ model = dict(
     flow_similarity_threshold=0.8,
     color_similarity_threshold=0.7,
     proximity_threshold=0.5,
-    flow_weight=0,
-    color_weight=0,
-    proximity_weight=0,
-    sam_weight=1.0,
+    flow_weight=0.1,
+    color_weight=0.1,
+    proximity_weight=0.1,
+    sam_weight=0,
 )
 
 # scheduler settings

@@ -32,7 +32,9 @@ class KITTIdcDataset(DefaultDataset):
         self.flow_3d_data = np.load(os.path.join(self.data_root, 'flow3d_outputs.npy'))
         self.flow_3d_data = np.transpose(self.flow_3d_data, (0,2,1))
         
+        self.index_list = None
         self.data_list = self.get_data_list()
+        
         
     def get_data_list(self):
         flow_files = sorted(glob.glob(os.path.join(self.data_root, 'flow', '*.png')))
@@ -42,11 +44,20 @@ class KITTIdcDataset(DefaultDataset):
             data_list.append(file_id)
         
         if self.split in ['val', 'test']:
-            data_list = data_list[:100]
+            indices = list(range(len(data_list)))
+            self.index_list = random.sample(indices, 10)
+            data_list = [data_list[i] for i in self.index_list]
         return data_list
-
+    
+    def get_index_list(self):
+        
+        return None
+    
     def get_data(self, idx):
+
         file_id = self.data_list[idx]
+        if self.split in ['val', 'test']:
+            idx = self.index_list[idx]
         # Get point cloud coordinates and RGB values from loaded data
         coord = self.pc1_data[idx]
         color = self.pc1_rgb_data[idx]
