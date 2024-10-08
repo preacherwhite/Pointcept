@@ -44,8 +44,9 @@ class KITTIdcDataset(DefaultDataset):
             data_list.append(file_id)
         
         if self.split in ['val', 'test']:
-            indices = list(range(len(data_list)))
-            self.index_list = random.sample(indices, 10)
+            total_samples = len(data_list)
+            step = total_samples // 20 
+            self.index_list = list(range(0, total_samples, step))[:20] 
             data_list = [data_list[i] for i in self.index_list]
         return data_list
     

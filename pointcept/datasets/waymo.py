@@ -18,7 +18,7 @@ class WaymoDataset(DefaultDataset):
     def __init__(
         self,
         split="training",
-        data_root="data/waymo",
+        data_root="/media/staging1/dhwang/Waymo/poincept_derived",
         transform=None,
         test_mode=False,
         test_cfg=None,

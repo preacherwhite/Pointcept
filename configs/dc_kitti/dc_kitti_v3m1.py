@@ -1,8 +1,8 @@
 _base_ = ["../_base_/default_runtime.py"]
 
 # misc custom setting
-batch_size = 1 # bs: total bs in all gpus
-num_worker = 1
+batch_size = 16 # bs: total bs in all gpus
+num_worker = 4
 mix_prob = 0
 empty_cache = False
 enable_amp = False
@@ -48,18 +48,18 @@ model = dict(
     flow_similarity_threshold=0.8,
     color_similarity_threshold=0.7,
     proximity_threshold=0.5,
-    flow_weight=0.1,
-    color_weight=0.1,
-    proximity_weight=0.1,
-    sam_weight=0,
+    flow_weight=0.3,
+    color_weight=0.3,
+    proximity_weight=0.3,
+    sam_weight=0.1,
 )
 
 # scheduler settings
 epoch = 50
 eval_epoch = 50
-global_lr = 0.002
+global_lr = 0.01
 
-optimizer = dict(type="AdamW", lr=global_lr, weight_decay=0.005)
+optimizer = dict(type="AdamW", lr=global_lr, weight_decay=0.0005)
 scheduler = dict(
     type="OneCycleLR",
     max_lr=[global_lr, global_lr/10],

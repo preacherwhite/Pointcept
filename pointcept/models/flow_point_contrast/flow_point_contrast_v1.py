@@ -35,7 +35,6 @@ def hard_compute_contrastive_loss(logits_list, mask):
 
     for i in range(batch_size):
         logits = logits_list[i]
-
         positive_mask, negative_mask = generate_positive_and_negative_masks(mask[i])
 
         exp_logits = torch.exp(logits)
@@ -77,7 +76,6 @@ def masked_contrastive_loss(features_list, mask, temperature=0.07):
             torch.norm(features, p=2, dim=1, keepdim=True) + 1e-7
         )
         logits = torch.matmul(normalized_features, normalized_features.transpose(0, 1)) / temperature
-
 
         logits_list.append(logits)
 
@@ -250,11 +248,11 @@ class FlowPointContrast(nn.Module):
             features_split, proximity_similarity_list, self.proximity_threshold, gamma = 5.0, eta =1, nu = 1
         )
         #print(len(sam_split),sam_split[0].shape)
-        #sam_loss = masked_contrastive_loss(features_split, sam_split, self.sam_weight)
+        sam_loss = masked_contrastive_loss(features_split, sam_split, temperature=0.07) 
         loss =  self.color_weight * color_loss + \
                 self.flow_weight * flow_loss + \
-                self.proximity_weight * proximity_loss #+ \
-                #1 * sam_loss
+                self.proximity_weight * proximity_loss + \
+                self.sam_weight* sam_loss
     
         # print(flow_loss.item(), self.flow_weight, color_loss.item(), self.color_weight,proximity_loss.item(),self.proximity_weight,sam_loss.item(),self.sam_weight)
         # print(loss)

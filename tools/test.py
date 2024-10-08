@@ -12,7 +12,7 @@ from pointcept.engines.defaults import (
 )
 from pointcept.engines.test import TESTERS
 from pointcept.engines.launch import launch
-
+import random
 
 def main_worker(cfg):
     cfg = default_setup(cfg)
@@ -23,7 +23,7 @@ def main_worker(cfg):
 def main():
     args = default_argument_parser().parse_args()
     cfg = default_config_parser(args.config_file, args.options)
-
+    random.seed(10)
     launch(
         main_worker,
         num_gpus_per_machine=args.num_gpus,
