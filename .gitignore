@@ -14,3 +14,10 @@ outputs/
 */.DS_Store
 **/*.out
 Dockerfile
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
