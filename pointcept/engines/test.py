@@ -14,7 +14,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import torch.utils.data
 from kmeans_pytorch import kmeans
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from scipy.spatial.transform import Rotation as R
+from plyfile import PlyData, PlyElement
 import cv2
 
 from .defaults import create_ddp_model
@@ -117,19 +119,23 @@ class TesterBase:
 @TESTERS.register_module()
 class SemSegTester(TesterBase):
     def test(self):
+        # Ensure that the batch size of the test loader is 1
         assert self.test_loader.batch_size == 1
         logger = get_root_logger()
         logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
 
+        # Initialize meters to track batch time, intersection, union, and target
         batch_time = AverageMeter()
         intersection_meter = AverageMeter()
         union_meter = AverageMeter()
         target_meter = AverageMeter()
         self.model.eval()
 
+        # Create directory to save results
         save_path = os.path.join(self.cfg.save_path, "result")
         make_dirs(save_path)
-        # create submit folder only on main process
+        
+        # Create submit folder only on the main process for specific datasets
         if (
             self.cfg.data.test.type == "ScanNetDataset"
             or self.cfg.data.test.type == "ScanNet200Dataset"
@@ -157,16 +163,21 @@ class SemSegTester(TesterBase):
                 os.path.join(save_path, "submit", "test", "submission.json"), "w"
             ) as f:
                 json.dump(submission, f, indent=4)
+        
+        # Synchronize processes
         comm.synchronize()
         record = {}
-        # fragment inference
+        
+        # Fragment inference
         for idx, data_dict in enumerate(self.test_loader):
             end = time.time()
-            data_dict = data_dict[0]  # current assume batch size is 1
+            data_dict = data_dict[0]  # Assume batch size is 1
             fragment_list = data_dict.pop("fragment_list")
             segment = data_dict.pop("segment")
             data_name = data_dict.pop("name")
             pred_save_path = os.path.join(save_path, "{}_pred.npy".format(data_name))
+            
+            # Load prediction if it exists
             if os.path.isfile(pred_save_path):
                 logger.info(
                     "{}/{}: {}, loaded pred and label.".format(
@@ -175,6 +186,7 @@ class SemSegTester(TesterBase):
                 )
                 pred = np.load(pred_save_path)
             else:
+                # Initialize prediction tensor
                 pred = torch.zeros((segment.size, self.cfg.data.num_classes)).cuda()
                 for i in range(len(fragment_list)):
                     fragment_batch_size = 1
@@ -207,10 +219,14 @@ class SemSegTester(TesterBase):
                     )
                 pred = pred.max(1)[1].data.cpu().numpy()
                 np.save(pred_save_path, pred)
+            
+            # Handle origin segment and inverse mapping if present
             if "origin_segment" in data_dict.keys():
                 assert "inverse" in data_dict.keys()
                 pred = pred[data_dict["inverse"]]
                 segment = data_dict["origin_segment"]
+            
+            # Compute intersection, union, and target metrics
             intersection, union, target = intersection_and_union(
                 pred, segment, self.cfg.data.num_classes, self.cfg.data.ignore_index
             )
@@ -221,6 +237,7 @@ class SemSegTester(TesterBase):
                 intersection=intersection, union=union, target=target
             )
 
+            # Compute IoU and accuracy
             mask = union != 0
             iou_class = intersection / (union + 1e-10)
             iou = np.mean(iou_class[mask])
@@ -246,6 +263,8 @@ class SemSegTester(TesterBase):
                     m_iou=m_iou,
                 )
             )
+            
+            # Save predictions for specific datasets
             if (
                 self.cfg.data.test.type == "ScanNetDataset"
                 or self.cfg.data.test.type == "ScanNet200Dataset"
@@ -293,6 +312,7 @@ class SemSegTester(TesterBase):
         comm.synchronize()
         record_sync = comm.gather(record, dst=0)
 
+        # Aggregate results on the main process
         if comm.is_main_process():
             record = {}
             for _ in range(len(record_sync)):
@@ -305,12 +325,14 @@ class SemSegTester(TesterBase):
             union = np.sum([meters["union"] for _, meters in record.items()], axis=0)
             target = np.sum([meters["target"] for _, meters in record.items()], axis=0)
 
+            # Save results for S3DISDataset
             if self.cfg.data.test.type == "S3DISDataset":
                 torch.save(
                     dict(intersection=intersection, union=union, target=target),
                     os.path.join(save_path, f"{self.test_loader.dataset.split}.pth"),
                 )
 
+            # Compute and log final metrics
             iou_class = intersection / (union + 1e-10)
             accuracy_class = intersection / (target + 1e-10)
             mIoU = np.mean(iou_class)
@@ -618,3 +640,72 @@ class ClusterSegTester(TesterBase):
     @staticmethod
     def collate_fn(batch):
         return collate_fn(batch)
+    
+
+@TESTERS.register_module()
+class WaymoPPClusterTester(TesterBase):
+    def test(self):
+        assert self.test_loader.batch_size == 1
+        test_dataset = self.test_loader.dataset
+        logger = get_root_logger()
+        logger.info(">>>>>>>>>>>>>>>> Start Evaluation >>>>>>>>>>>>>>>>")
+
+        batch_time = AverageMeter()
+
+        self.model.eval()
+
+        make_dirs(os.path.join(self.cfg.save_path, "result"))
+        save_path = os.path.join(self.cfg.save_path, "result")
+
+        # Fragment inference
+        print("start testing")
+        for idx, data_dict in enumerate(test_dataset):
+            print("testing {}".format(idx))
+            end = time.time()
+            data_dict = test_dataset[idx]
+            fragment_list = data_dict.pop("fragment_list")
+            segment = data_dict.pop("segment")
+            data_name = data_dict.pop("name")
+
+            for i in range(len(fragment_list)):
+                input_dict = collate_fn([fragment_list[i]])
+                for key in input_dict.keys():
+                    if isinstance(input_dict[key], torch.Tensor):
+                        input_dict[key] = input_dict[key].cuda(non_blocking=True)
+                with torch.no_grad():
+                    out_feat = self.model(input_dict)
+                    coords = input_dict['coord'].cpu().numpy()
+                    
+                    # Perform k-means clustering
+                    n_clusters = 50
+                    cluster_ids, _ = kmeans(
+                        X=out_feat, num_clusters=n_clusters, distance='cosine', iter_limit = 100, device=out_feat.device
+                    )
+                    cluster_ids = cluster_ids.cpu().numpy()
+
+                # Save point cloud with cluster labels and feature vectors as PLY file
+                vertex = np.array([(coords[i,0], coords[i,1], coords[i,2], cluster_ids[i], *out_feat[i].cpu().numpy()) 
+                                for i in range(len(coords))])
+                #print(save_path)
+                np_save_path = os.path.join(save_path, f'{idx}_{i}_clustered.npy')
+                np.save(np_save_path, vertex)
+                logger.info(
+                    "Test: {}/{}-{data_name}, Batch: {batch_idx}/{batch_num}".format(
+                        idx + 1,
+                        len(self.test_loader),
+                        data_name=data_name,
+                        batch_idx=i,
+                        batch_num=len(fragment_list),
+                    )
+                )
+            batch_time.update(time.time() - end)
+            logger.info(
+                "Test: {} [{}/{}] "
+                "Batch {batch_time.val:.3f} "
+            )
+
+        logger.info("<<<<<<<<<<<<<<<<< End Evaluation <<<<<<<<<<<<<<<<<")
+
+    # @staticmethod
+    # def collate_fn(batch):
+    #     return collate_fn(batch)

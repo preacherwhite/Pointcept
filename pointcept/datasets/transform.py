@@ -191,17 +191,30 @@ class PointClip(object):
 class RandomDropout(object):
     def __init__(self, dropout_ratio=0.2, dropout_application_ratio=0.5):
         """
+        Initialize the RandomDropout transform.
         upright_axis: axis index among x,y,z, i.e. 2 for z
+        Args:
+            dropout_ratio (float): The ratio of points to drop out.
+            dropout_application_ratio (float): The probability of applying the dropout.
         """
         self.dropout_ratio = dropout_ratio
         self.dropout_application_ratio = dropout_application_ratio
 
     def __call__(self, data_dict):
+        """
+        Apply the RandomDropout transform to the input data dictionary.
+
+        Args:
+            data_dict (dict): The input data dictionary containing point cloud data.
+
+        Returns:
+            dict: The transformed data dictionary with points randomly dropped out.
+        """
         if random.random() < self.dropout_application_ratio:
             n = len(data_dict["coord"])
             idx = np.random.choice(n, int(n * (1 - self.dropout_ratio)), replace=False)
             if "sampled_index" in data_dict:
-                # for ScanNet data efficient, we need to make sure labeled point is sampled.
+                # Ensure labeled points are not dropped out for ScanNet data efficiency.
                 idx = np.unique(np.append(idx, data_dict["sampled_index"]))
                 mask = np.zeros_like(data_dict["segment"]).astype(bool)
                 mask[data_dict["sampled_index"]] = True

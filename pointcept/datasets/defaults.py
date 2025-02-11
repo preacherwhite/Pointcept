@@ -115,6 +115,7 @@ class DefaultDataset(Dataset):
             if self.test_voxelize is not None:
                 data_part_list = self.test_voxelize(data)
             else:
+                #an array of indices from 0 to the number of coordinates in the data
                 data["index"] = np.arange(data["coord"].shape[0])
                 data_part_list = [data]
             for data_part in data_part_list:

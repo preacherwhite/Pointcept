@@ -23,3 +23,5 @@ from .dataloader import MultiDatasetDataloader
 
 # kitti dc
 from .kitti_dc import KITTIdcDataset
+
+from .waymopp import WaymoPlusPlusDataset

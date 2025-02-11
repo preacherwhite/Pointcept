@@ -3,9 +3,6 @@ from itertools import chain
 import torch
 import torch.nn as nn
 
-from torch_geometric.nn.pool import voxel_grid
-from timm.models.layers import trunc_normal_
-from segment_anything import build_sam, SamAutomaticMaskGenerator
 from pointcept.models.builder import MODELS, build_model
 from pointcept.models.utils import offset2batch
 import numpy as np
